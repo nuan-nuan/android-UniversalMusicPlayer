@@ -13,13 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.example.android.uamp;
+package com.example.android.uamp.playback;
 
-import android.media.session.PlaybackState;
 import android.net.Uri;
+import android.support.v4.media.MediaMetadataCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.text.TextUtils;
 
 import com.example.android.uamp.model.MusicProvider;
+import com.example.android.uamp.model.MusicProviderSource;
 import com.example.android.uamp.utils.LogHelper;
 import com.example.android.uamp.utils.MediaIDHelper;
 import com.google.android.gms.cast.MediaInfo;
@@ -35,7 +37,7 @@ import com.google.android.libraries.cast.companionlibrary.cast.exceptions.Transi
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import static android.media.session.MediaSession.QueueItem;
+import static android.support.v4.media.session.MediaSessionCompat.QueueItem;
 
 /**
  * An implementation of Playback that talks to Cast.
@@ -53,7 +55,7 @@ public class CastPlayback implements Playback {
         @Override
         public void onRemoteMediaPlayerMetadataUpdated() {
             LogHelper.d(TAG, "onRemoteMediaPlayerMetadataUpdated");
-            updateMetadata();
+            setMetadataFromRemote();
         }
 
         @Override
@@ -67,7 +69,6 @@ public class CastPlayback implements Playback {
     private int mState;
     /** Callback for making completion/error calls on */
     private Callback mCallback;
-    private VideoCastManager mCastManager;
     private volatile int mCurrentPosition;
     private volatile String mCurrentMediaId;
 
@@ -77,14 +78,13 @@ public class CastPlayback implements Playback {
 
     @Override
     public void start() {
-        mCastManager = VideoCastManager.getInstance();
-        mCastManager.addVideoCastConsumer(mCastConsumer);
+        VideoCastManager.getInstance().addVideoCastConsumer(mCastConsumer);
     }
 
     @Override
     public void stop(boolean notifyListeners) {
-        mCastManager.removeVideoCastConsumer(mCastConsumer);
-        mState = PlaybackState.STATE_STOPPED;
+        VideoCastManager.getInstance().removeVideoCastConsumer(mCastConsumer);
+        mState = PlaybackStateCompat.STATE_STOPPED;
         if (notifyListeners && mCallback != null) {
             mCallback.onPlaybackStatusChanged(mState);
         }
@@ -97,11 +97,11 @@ public class CastPlayback implements Playback {
 
     @Override
     public int getCurrentStreamPosition() {
-        if (!mCastManager.isConnected()) {
+        if (!VideoCastManager.getInstance().isConnected()) {
             return mCurrentPosition;
         }
         try {
-            return (int) mCastManager.getCurrentMediaPosition();
+            return (int) VideoCastManager.getInstance().getCurrentMediaPosition();
         } catch (TransientNetworkDisconnectionException | NoConnectionException e) {
             LogHelper.e(TAG, e, "Exception getting media position");
         }
@@ -122,7 +122,7 @@ public class CastPlayback implements Playback {
     public void play(QueueItem item) {
         try {
             loadMedia(item.getDescription().getMediaId(), true);
-            mState = PlaybackState.STATE_BUFFERING;
+            mState = PlaybackStateCompat.STATE_BUFFERING;
             if (mCallback != null) {
                 mCallback.onPlaybackStatusChanged(mState);
             }
@@ -138,9 +138,10 @@ public class CastPlayback implements Playback {
     @Override
     public void pause() {
         try {
-            if (mCastManager.isRemoteMediaLoaded()) {
-                mCastManager.pause();
-                mCurrentPosition = (int) mCastManager.getCurrentMediaPosition();
+            VideoCastManager manager = VideoCastManager.getInstance();
+            if (manager.isRemoteMediaLoaded()) {
+                manager.pause();
+                mCurrentPosition = (int) manager.getCurrentMediaPosition();
             } else {
                 loadMedia(mCurrentMediaId, false);
             }
@@ -162,8 +163,8 @@ public class CastPlayback implements Playback {
             return;
         }
         try {
-            if (mCastManager.isRemoteMediaLoaded()) {
-                mCastManager.seek(position);
+            if (VideoCastManager.getInstance().isRemoteMediaLoaded()) {
+                VideoCastManager.getInstance().seek(position);
                 mCurrentPosition = position;
             } else {
                 mCurrentPosition = position;
@@ -195,13 +196,14 @@ public class CastPlayback implements Playback {
 
     @Override
     public boolean isConnected() {
-        return mCastManager.isConnected();
+        return VideoCastManager.getInstance().isConnected();
     }
 
     @Override
     public boolean isPlaying() {
         try {
-            return mCastManager.isConnected() && mCastManager.isRemoteMediaPlaying();
+            return VideoCastManager.getInstance().isConnected() &&
+                    VideoCastManager.getInstance().isRemoteMediaPlaying();
         } catch (TransientNetworkDisconnectionException | NoConnectionException e) {
             LogHelper.e(TAG, e, "Exception calling isRemoteMoviePlaying");
         }
@@ -216,7 +218,7 @@ public class CastPlayback implements Playback {
     private void loadMedia(String mediaId, boolean autoPlay) throws
             TransientNetworkDisconnectionException, NoConnectionException, JSONException {
         String musicId = MediaIDHelper.extractMusicIDFromMediaID(mediaId);
-        android.media.MediaMetadata track = mMusicProvider.getMusic(musicId);
+        MediaMetadataCompat track = mMusicProvider.getMusic(musicId);
         if (track == null) {
             throw new IllegalArgumentException("Invalid mediaId " + mediaId);
         }
@@ -227,7 +229,7 @@ public class CastPlayback implements Playback {
         JSONObject customData = new JSONObject();
         customData.put(ITEM_ID, mediaId);
         MediaInfo media = toCastMediaMetadata(track, customData);
-        mCastManager.loadMedia(media, autoPlay, mCurrentPosition, customData);
+        VideoCastManager.getInstance().loadMedia(media, autoPlay, mCurrentPosition, customData);
     }
 
     /**
@@ -238,7 +240,7 @@ public class CastPlayback implements Playback {
      * @param customData custom data specifies the local mediaId used by the player.
      * @return mediaInfo {@link com.google.android.gms.cast.MediaInfo}
      */
-    private static MediaInfo toCastMediaMetadata(android.media.MediaMetadata track,
+    private static MediaInfo toCastMediaMetadata(MediaMetadataCompat track,
                                                  JSONObject customData) {
         MediaMetadata mediaMetadata = new MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK);
         mediaMetadata.putString(MediaMetadata.KEY_TITLE,
@@ -248,12 +250,12 @@ public class CastPlayback implements Playback {
                 track.getDescription().getSubtitle() == null ? "" :
                     track.getDescription().getSubtitle().toString());
         mediaMetadata.putString(MediaMetadata.KEY_ALBUM_ARTIST,
-                track.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ARTIST));
+                track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST));
         mediaMetadata.putString(MediaMetadata.KEY_ALBUM_TITLE,
-                track.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM));
+                track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM));
         WebImage image = new WebImage(
                 new Uri.Builder().encodedPath(
-                        track.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI))
+                        track.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
                         .build());
         // First image is used by the receiver for showing the audio album art.
         mediaMetadata.addImage(image);
@@ -261,7 +263,8 @@ public class CastPlayback implements Playback {
         // when the cast dialog is clicked.
         mediaMetadata.addImage(image);
 
-        return new MediaInfo.Builder(track.getString(MusicProvider.CUSTOM_METADATA_TRACK_SOURCE))
+        //noinspection ResourceType
+        return new MediaInfo.Builder(track.getString(MusicProviderSource.CUSTOM_METADATA_TRACK_SOURCE))
                 .setContentType(MIME_TYPE_AUDIO_MPEG)
                 .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
                 .setMetadata(mediaMetadata)
@@ -269,13 +272,13 @@ public class CastPlayback implements Playback {
                 .build();
     }
 
-    private void updateMetadata() {
+    private void setMetadataFromRemote() {
         // Sync: We get the customData from the remote media information and update the local
         // metadata if it happens to be different from the one we are currently using.
         // This can happen when the app was either restarted/disconnected + connected, or if the
         // app joins an existing session while the Chromecast was playing a queue.
         try {
-            MediaInfo mediaInfo = mCastManager.getRemoteMediaInformation();
+            MediaInfo mediaInfo = VideoCastManager.getInstance().getRemoteMediaInformation();
             if (mediaInfo == null) {
                 return;
             }
@@ -286,7 +289,7 @@ public class CastPlayback implements Playback {
                 if (!TextUtils.equals(mCurrentMediaId, remoteMediaId)) {
                     mCurrentMediaId = remoteMediaId;
                     if (mCallback != null) {
-                        mCallback.onMetadataChanged(remoteMediaId);
+                        mCallback.setCurrentMediaId(remoteMediaId);
                     }
                     updateLastKnownStreamPosition();
                 }
@@ -298,8 +301,8 @@ public class CastPlayback implements Playback {
     }
 
     private void updatePlaybackState() {
-        int status = mCastManager.getPlaybackStatus();
-        int idleReason = mCastManager.getIdleReason();
+        int status = VideoCastManager.getInstance().getPlaybackStatus();
+        int idleReason = VideoCastManager.getInstance().getIdleReason();
 
         LogHelper.d(TAG, "onRemoteMediaPlayerStatusUpdated ", status);
 
@@ -313,21 +316,21 @@ public class CastPlayback implements Playback {
                 }
                 break;
             case MediaStatus.PLAYER_STATE_BUFFERING:
-                mState = PlaybackState.STATE_BUFFERING;
+                mState = PlaybackStateCompat.STATE_BUFFERING;
                 if (mCallback != null) {
                     mCallback.onPlaybackStatusChanged(mState);
                 }
                 break;
             case MediaStatus.PLAYER_STATE_PLAYING:
-                mState = PlaybackState.STATE_PLAYING;
-                updateMetadata();
+                mState = PlaybackStateCompat.STATE_PLAYING;
+                setMetadataFromRemote();
                 if (mCallback != null) {
                     mCallback.onPlaybackStatusChanged(mState);
                 }
                 break;
             case MediaStatus.PLAYER_STATE_PAUSED:
-                mState = PlaybackState.STATE_PAUSED;
-                updateMetadata();
+                mState = PlaybackStateCompat.STATE_PAUSED;
+                setMetadataFromRemote();
                 if (mCallback != null) {
                     mCallback.onPlaybackStatusChanged(mState);
                 }
